@@ -4,12 +4,24 @@ from google.genai import types
 from dotenv import load_dotenv
 import argparse
 from prompts import system_prompt
+from functions.get_files_info import schema_get_files_info
+from functions.get_file_content import schema_get_file_content
+from functions.write_file import schema_write_file
+from functions.run_python_file import schema_run_python_file
+from functions.get_files_info import get_files_info
+from functions.get_file_content import get_file_content
+from functions.write_file import write_file
+from functions.run_python_file import run_python_file
+available_functions = types.Tool(
+    function_declarations=[schema_get_files_info, schema_get_file_content
+                           , schema_write_file, schema_run_python_file]
+)
 
 def generate_content(client, messages, verbose):
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=messages,
-        config=types.GenerateContentConfig(system_instruction=system_prompt),
+        config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
     )
     if response.usage_metadata is None:
         raise RuntimeError("the usage metadata is empty")
@@ -21,7 +33,59 @@ def generate_content(client, messages, verbose):
     if verbose:
         print(f"Prompt tokens: {prompt_tokens_number}")
         print(f"Response tokens: {response_tokens_number}")
-    print(f"Response: \n{response_text}")
+    response_func_calls = response.function_calls
+    function_call_parts = []
+    if not response_func_calls:
+        print(response_text)
+        return
+    if response_func_calls:
+        for func in response_func_calls:
+            function_call_result = call_function(func, verbose=verbose)
+            if (
+                not function_call_result.parts
+                or function_call_result.parts[0].function_response is None
+            ):
+                raise RuntimeError("Function call result missing function_response")
+            function_call_parts.append(function_call_result.parts[0])
+            if verbose:
+                print(f"-> {function_call_result.parts[0].function_response.response}")
+
+def call_function(function_call_part, verbose=False):
+    if verbose:
+        print(f"Calling function: {function_call_part.name}({function_call_part.args})")
+    else:
+        print(f" - Calling function: {function_call_part.name}")
+    function_map = {
+        "get_files_info": get_files_info,
+        "get_file_content": get_file_content,
+        "run_python_file": run_python_file,
+        "write_file": write_file,
+    }
+    args = dict(function_call_part.args)
+    args["working_directory"] = "./calculator"
+    function_name = function_call_part.name
+    func = function_map.get(function_name)
+    if func is None:
+        return types.Content(
+        role="tool",
+        parts=[
+            types.Part.from_function_response(
+                name=function_name,
+                response={"error": f"Unknown function: {function_name}"},
+            )
+        ],
+    )
+    else:
+        result = func(**args)
+        return types.Content(
+        role="tool",
+        parts=[
+            types.Part.from_function_response(
+                name=function_name,
+                response={"result": result},
+            )
+        ],
+    )
 
 def main():
     parser = argparse.ArgumentParser(description="AI Code Assistant")
