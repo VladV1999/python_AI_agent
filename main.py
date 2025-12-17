@@ -23,21 +23,16 @@ def generate_content(client, messages, verbose):
         contents=messages,
         config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
     )
+    for candidate in response.candidates:
+        messages.append(candidate.content)
     if response.usage_metadata is None:
         raise RuntimeError("the usage metadata is empty")
-
-    prompt_tokens_number = response.usage_metadata.prompt_token_count
-    response_tokens_number = response.usage_metadata.candidates_token_count
     response_text = response.text
 
-    if verbose:
-        print(f"Prompt tokens: {prompt_tokens_number}")
-        print(f"Response tokens: {response_tokens_number}")
     response_func_calls = response.function_calls
     function_call_parts = []
     if not response_func_calls:
-        print(response_text)
-        return
+        return response_text
     if response_func_calls:
         for func in response_func_calls:
             function_call_result = call_function(func, verbose=verbose)
@@ -49,6 +44,8 @@ def generate_content(client, messages, verbose):
             function_call_parts.append(function_call_result.parts[0])
             if verbose:
                 print(f"-> {function_call_result.parts[0].function_response.response}")
+        messages.append(types.Content(role="user", parts=function_call_parts))
+
 
 def call_function(function_call_part, verbose=False):
     if verbose:
@@ -98,7 +95,16 @@ def main():
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY environment variable not set")
     messages = [types.Content(role="user", parts=[types.Part(text=args.user_prompt)])]
-    generate_content(client, messages, args.verbose)
-
+    
+    for _ in range(0, 20): 
+        try:
+            final_response = generate_content(client, messages, args.verbose)
+            if final_response:
+                print(final_response)
+                break
+            if not final_response:
+                continue
+        except Exception as e:
+            print(f"Error: encountered {e}")
 if __name__ == "__main__":
     main()
